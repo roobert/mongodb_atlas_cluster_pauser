@@ -22,7 +22,7 @@ def main(event, context):
     print(f"context: {context}")
 
     try:
-        mongodb_cluster_pauser(event)
+        mongodb_atlas_cluster_pauser(event)
     except Exception as error:
         if os.environ.get("DEBUG") == "true":
             raise
@@ -30,7 +30,7 @@ def main(event, context):
         exit(1)
 
 
-def mongodb_cluster_pauser(event):
+def mongodb_atlas_cluster_pauser(event):
     if not event.get("data"):
         raise EventError(f"no data key in event: {event}")
 
