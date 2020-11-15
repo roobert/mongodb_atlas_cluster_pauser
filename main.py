@@ -120,7 +120,7 @@ if __name__ == "__main__":
     data = b64encode(
         json.dumps(
             {
-                "project_name": "dev0-document-service0",
+                "project_name": "dev0-rating-service0",
                 "cluster": "cluster0",
                 "action": "pause",
             }
