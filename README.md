@@ -1,6 +1,6 @@
 # MongoDB Cluster Pauser
 
-## Abstract
+## Abstract
 
 Simple wrapper for `mongocli(1)` to pause and unpause ATLAS clusters triggered by GCP scheduler and a pub/sub queue.
 
