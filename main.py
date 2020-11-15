@@ -28,7 +28,8 @@ def main(event, context):
     except Exception as error:
         if os.environ.get("DEBUG") == "true":
             raise
-        raise SystemExit(f"{error.__class__.__name__}: {error}")
+        print(f"{error.__class__.__name__}: {error}")
+        exit(1)
 
 
 def mongodb_atlas_cluster_pauser(event):
