@@ -5,8 +5,10 @@
 import json
 import os
 from base64 import b64decode, b64encode
+from urllib.parse import urljoin
 
-from sh import ErrorReturnCode_1, mongocli
+import requests
+from requests.auth import HTTPDigestAuth
 
 
 class EventError(Exception):
@@ -26,8 +28,7 @@ def main(event, context):
     except Exception as error:
         if os.environ.get("DEBUG") == "true":
             raise
-        print(f"{error.__class__.__name__}: {error}")
-        exit(1)
+        raise SystemExit(f"{error.__class__.__name__}: {error}")
 
 
 def mongodb_atlas_cluster_pauser(event):
@@ -43,64 +44,34 @@ def mongodb_atlas_cluster_pauser(event):
     except KeyError as error:
         raise EventError(f"'{error}': missing key from event event: {event}")
 
-    if action == "start":
-        _start(project_name, cluster)
+    print(f"{project_name}/{cluster}: triggering {action}")
+    if action == "unpause":
+        response = _pause(project_name, cluster, False)
     elif action == "pause":
-        _pause(project_name, cluster)
+        response = _pause(project_name, cluster, True)
     else:
         raise EventError(f"unknown action: '{action}'")
 
-
-def _environment(project_name):
-    org_id, project_id = _project_data(project_name)
-
     try:
-        mcli_public_api_key = os.environ["MCLI_PUBLIC_API_KEY"]
-        mcli_private_api_key = os.environ["MCLI_PRIVATE_API_KEY"]
-    except KeyError as error:
-        raise EnvironmentError(error) from error
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as error:
+        if action == "pause":
+            if error.response.status_code == 409:
+                raise ActionError(
+                    f"{project_name}/{cluster}: failing to pause cluster: is cluster already paused?"
+                )
+            if error.response.status_code == 400:
+                raise ActionError(
+                    f"{project_name}/{cluster}: failing to pause cluster - has cluster already been paused in last 60 minutes?"
+                )
 
-    environment = {
-        "MCLI_PUBLIC_API_KEY": mcli_public_api_key,
-        "MCLI_PRIVATE_API_KEY": mcli_private_api_key,
-        "MCLI_ORG_ID": org_id,
-        "MCLI_PROJECT_ID": project_id,
-        "MCLI_SERVICE": "cloud",
-        **os.environ.copy(),
-    }
-
-    mongocli_bin_path = os.path.join(os.path.realpath(__file__), "bin")
-    environment["PATH"] = f"{mongocli_bin_path}:{environment['PATH']}"
-
-    return environment
+        raise ActionError(error) from error
 
 
-# pause calls will fail if the cluster is already paused
-def _pause(project_name, cluster):
-    try:
-        print(
-            mongocli.atlas.cluster.pause(
-                cluster, "-o=json", _env=_environment(project_name)
-            ).stdout.decode("UTF-8")
-        )
-    except ErrorReturnCode_1 as error:
-        raise ActionError(error.stderr.decode("UTF-8").rstrip()) from error
-
-
-# start calls are idempotent and always(?) succeed..
-def _start(project_name, cluster):
-    try:
-        print(
-            mongocli.atlas.cluster.start(
-                cluster, "-o=json", _env=_environment(project_name)
-            ).stdout.decode("UTF-8")
-        )
-    except ErrorReturnCode_1 as error:
-        raise ActionError(error.stderr.decode("UTF-8").rstrip()) from error
-
-
-def _project_list():
-    return json.loads(mongocli.iam.projects.list("-o=json").stdout.decode("UTF-8"))
+def _pause(project_name, cluster, pause):
+    _, project_id = _project_data(project_name)
+    data = {"paused": pause}
+    return atlas_request(f"groups/{project_id}/clusters/{cluster}", "patch", data)
 
 
 def _project_data(project_name):
@@ -119,19 +90,44 @@ def _project_data(project_name):
     return projects[0]["orgId"], projects[0]["id"]
 
 
+def _project_list():
+    return atlas_request("groups").json()
+
+
+def atlas_request(path, request_type="get", data={}):
+    try:
+        mcli_public_api_key = os.environ["MCLI_PUBLIC_API_KEY"]
+        mcli_private_api_key = os.environ["MCLI_PRIVATE_API_KEY"]
+    except KeyError as error:
+        raise EnvironmentError(error) from error
+
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    auth = HTTPDigestAuth(mcli_public_api_key, mcli_private_api_key)
+    url = urljoin("https://cloud.mongodb.com/api/atlas/v1.0/", path, "?pretty=true")
+
+    if request_type == "get":
+        response = requests.get(url, headers=headers, auth=auth)
+    elif request_type == "patch":
+        response = requests.patch(url, headers=headers, auth=auth, json=data)
+    else:
+        raise NameError(f"unknown request type: {request_type}")
+
+    return response
+
+
 # run this script locally to test it using these parameters..
 if __name__ == "__main__":
-    json_data = json.dumps(
-        {
-            "project_name": "dev0-rating-service0",
-            "cluster": "cluster0",
-            "action": "start",
-        }
+    data = b64encode(
+        json.dumps(
+            {
+                "project_name": "dev0-document-service0",
+                "cluster": "cluster0",
+                "action": "pause",
+            }
+        ).encode("UTF-8")
     )
 
-    encoded_data = b64encode(json_data.encode("UTF-8"))
-
-    event = {"data": encoded_data}
+    event = {"data": data}
     context = {}
 
     main(event, context)
